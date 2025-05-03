@@ -44,8 +44,6 @@ void A_output(struct msg message) {
         return;
     }
 
-    printf("----A: New message arrives, send window is not full, send new messge to layer3!\n");
-
     newpkt.seqnum = A_nextseqnum;
     newpkt.acknum = NOTINUSE;
     for (i = 0; i < 20; i++)
@@ -56,13 +54,13 @@ void A_output(struct msg message) {
     A_buffered[A_nextseqnum] = true;
     A_acknowledged[A_nextseqnum] = false;
 
+    printf("----A: New message arrives, send window is not full, send new messge to layer3!\n");
+
     tolayer3(0, newpkt);
-    printf("Sending packet %d to layer 3\n", newpkt.seqnum);
 
     if (timer_seq == -1) {
         starttimer(0, RTT);
         timer_seq = A_nextseqnum;
-        printf("          START TIMER: starting timer for packet %d\n", timer_seq);
     }
 
     A_nextseqnum = (A_nextseqnum + 1) % SEQSPACE;
@@ -72,7 +70,7 @@ void A_input(struct pkt packet) {
     int acknum;
     int i;
     if (IsCorrupted(packet)) {
-        printf("----A: received corrupted ACK\n");
+        printf("----A: corrupted ACK is received, do nothing!\n");
         return;
     }
 
@@ -83,9 +81,11 @@ void A_input(struct pkt packet) {
     if (!A_acknowledged[acknum]) {
         A_acknowledged[acknum] = true;
         new_ACKs++;
-
         printf("----A: ACK %d is not a duplicate\n", acknum);
+    } else {
+        printf("----A: duplicate ACK received, do nothing!\n");
     }
+  
 
     if (acknum == timer_seq) {
         stoptimer(0);
@@ -114,7 +114,10 @@ void A_timerinterrupt(void) {
       return;
 
   if (A_buffered[timer_seq] && !A_acknowledged[timer_seq]) {
-      printf("----A: timeout, resend packet %d\n", timer_seq);
+      
+      printf("----A: time out,resend packets!\n");
+      printf ("---A: resending packet %d\n", timer_seq);
+    
       tolayer3(0, A_buffer[timer_seq]);
       packets_resent++;
   }
@@ -156,18 +159,14 @@ void B_input(struct pkt packet) {
     bool in_window;
 
     seqnum = packet.seqnum;
-    if (IsCorrupted(packet)) {
-        printf("----B: received corrupted packet\n");
+    if (IsCorrupted(packet) || !in_window) {
+        printf("----B: packet corrupted or not expected sequence number, resend ACK!\n");
         goto send_ack_only;
     }
+  
     upper_window = (B_expectedseqnum + WINDOWSIZE) % SEQSPACE;
     in_window = (B_expectedseqnum <= seqnum && seqnum < B_expectedseqnum + WINDOWSIZE) ||
                 (B_expectedseqnum + WINDOWSIZE >= SEQSPACE && seqnum < upper_window);
-
-    if (!in_window) {
-        printf("----B: packet %d is outside the receive window\n", seqnum);
-        goto send_ack_only;
-    }
 
     if (!B_received[seqnum]) {
         B_buffer[seqnum] = packet;
