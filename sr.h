@@ -1,13 +1,16 @@
 #ifndef SR_H
 #define SR_H
 
-#define BIDIRECTIONAL 0
+#include "emulator.h"
 
-/* Function prototypes for Selective Repeat protocol */
-void A_init(void);
-void B_init(void);
-void A_output(struct msg);
-void A_input(struct pkt);
+void A_output(struct msg message);
+void A_input(struct pkt packet);
 void A_timerinterrupt(void);
+void A_init(void);
+
+void B_output(struct msg message);
+void B_input(struct pkt packet);
+void B_timerinterrupt(void);
+void B_init(void);
 
 #endif
