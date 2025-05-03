@@ -205,64 +205,72 @@ void A_init(void)
 
 /********* Receiver (B)  variables and procedures ************/
 
-static int expectedseqnum; /* the sequence number expected next by the receiver */
-static int B_nextseqnum;   /* the sequence number for the next packets sent by B */
-
+static struct pkt B_buffer[SEQSPACE];         // Buffer for out-of-order packets
+static bool B_received[SEQSPACE];             // Flags indicating which packets are buffered
+static int B_expectedseqnum = 0;              // Base of receiver's receiving window
 
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet)
 {
-  struct pkt sendpkt;
-  int i;
+    struct pkt ackpkt;
+    int seqnum = packet.seqnum;
 
-  /* if not corrupted and received packet is in order */
-  if  ( (!IsCorrupted(packet))  && (packet.seqnum == expectedseqnum) ) {
+    // Check for corruption
+    if (IsCorrupted(packet)) {
+        if (TRACE > 0)
+            printf("B_input: Corrupted packet received, sending duplicate ACK for %d\n", (B_expectedseqnum - 1 + SEQSPACE) % SEQSPACE);
+        goto send_ack_only;
+    }
+
+    // Check if packet is within the receiver window
+    int upper_window = (B_expectedseqnum + WINDOWSIZE) % SEQSPACE;
+    bool in_window = (B_expectedseqnum <= seqnum && seqnum < B_expectedseqnum + WINDOWSIZE) ||
+                     (B_expectedseqnum + WINDOWSIZE >= SEQSPACE && seqnum < upper_window);
+
+    if (!in_window) {
+        if (TRACE > 0)
+            printf("B_input: Packet %d outside of receiving window, sending duplicate ACK.\n", seqnum);
+        goto send_ack_only;
+    }
+
+    // If the packet has not already been received, store it
+    if (!B_received[seqnum]) {
+        B_buffer[seqnum] = packet;
+        B_received[seqnum] = true;
+        if (TRACE > 0)
+            printf("B_input: Packet %d buffered.\n", seqnum);
+        packets_received++;
+    }
+
+    // Deliver any in-order packets to layer 5
+    while (B_received[B_expectedseqnum]) {
+        tolayer5(B, B_buffer[B_expectedseqnum].payload);
+        B_received[B_expectedseqnum] = false;
+        B_expectedseqnum = (B_expectedseqnum + 1) % SEQSPACE;
+    }
+
+send_ack_only:
+    // Send ACK (always), even for duplicate or corrupted packets
+    ackpkt.seqnum = 0;  // Not used
+    ackpkt.acknum = seqnum;
+    for (int i = 0; i < 20; i++)
+        ackpkt.payload[i] = '0';
+    ackpkt.checksum = ComputeChecksum(ackpkt);
+
     if (TRACE > 0)
-      printf("----B: packet %d is correctly received, send ACK!\n",packet.seqnum);
-    packets_received++;
-
-    /* deliver to receiving application */
-    tolayer5(B, packet.payload);
-
-    /* send an ACK for the received packet */
-    sendpkt.acknum = expectedseqnum;
-
-    /* update state variables */
-    expectedseqnum = (expectedseqnum + 1) % SEQSPACE;
-  }
-  else {
-    /* packet is corrupted or out of order resend last ACK */
-    if (TRACE > 0)
-      printf("----B: packet corrupted or not expected sequence number, resend ACK!\n");
-    if (expectedseqnum == 0)
-      sendpkt.acknum = SEQSPACE - 1;
-    else
-      sendpkt.acknum = expectedseqnum - 1;
-  }
-
-  /* create packet */
-  sendpkt.seqnum = B_nextseqnum;
-  B_nextseqnum = (B_nextseqnum + 1) % 2;
-
-  /* we don't have any data to send.  fill payload with 0's */
-  for ( i=0; i<20 ; i++ )
-    sendpkt.payload[i] = '0';
-
-  /* computer checksum */
-  sendpkt.checksum = ComputeChecksum(sendpkt);
-
-  /* send out packet */
-  tolayer3 (B, sendpkt);
+        printf("B_input: Sending ACK for seqnum %d\n", ackpkt.acknum);
+    tolayer3(B, ackpkt);
 }
 
 /* the following routine will be called once (only) before any other */
 /* entity B routines are called. You can use it to do any initialization */
 void B_init(void)
 {
-  expectedseqnum = 0;
-  B_nextseqnum = 1;
+    B_expectedseqnum = 0;
+    for (int i = 0; i < SEQSPACE; i++) {
+        B_received[i] = false;
+    }
 }
-
 /******************************************************************************
  * The following functions need be completed only for bi-directional messages *
  *****************************************************************************/
