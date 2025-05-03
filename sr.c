@@ -39,6 +39,7 @@ void A_output(struct msg message) {
     int window_size = (A_nextseqnum - A_base + SEQSPACE) % SEQSPACE;
     int i;
     if (window_size >= WINDOWSIZE) {
+        printf("----A: New message arrives, send window is full\n");
         window_full++;
         return;
     }
@@ -61,6 +62,7 @@ void A_output(struct msg message) {
     if (timer_seq == -1) {
         starttimer(0, RTT);
         timer_seq = A_nextseqnum;
+        printf("          START TIMER: starting timer for packet %d\n", timer_seq);
     }
 
     A_nextseqnum = (A_nextseqnum + 1) % SEQSPACE;
@@ -69,8 +71,10 @@ void A_output(struct msg message) {
 void A_input(struct pkt packet) {
     int acknum;
     int i;
-    if (IsCorrupted(packet))
+    if (IsCorrupted(packet)) {
+        printf("----A: received corrupted ACK\n");
         return;
+    }
 
     acknum = packet.acknum;
     printf("----A: uncorrupted ACK %d is received\n", acknum);
@@ -87,7 +91,7 @@ void A_input(struct pkt packet) {
         stoptimer(0);
         timer_seq = -1;
 
-        for (i = 0; i < WINDOWSIZE; i++) {
+        for (i = 0; i < SEQSPACE; i++) {
             int seq = (A_base + i) % SEQSPACE;
             if (A_buffered[seq] && !A_acknowledged[seq]) {
                 starttimer(0, RTT);
@@ -105,15 +109,29 @@ void A_input(struct pkt packet) {
 }
 
 void A_timerinterrupt(void) {
-    
-    struct pkt pkt_to_resend = A_buffer[timer_seq];
-    if (timer_seq == -1 || !A_buffered[timer_seq] || A_acknowledged[timer_seq])
-        return;
+  int i = 0;
+  if (timer_seq == -1)
+      return;
 
-    tolayer3(0, pkt_to_resend);
-    packets_resent++;
-    starttimer(0, RTT);
+  if (A_buffered[timer_seq] && !A_acknowledged[timer_seq]) {
+      printf("----A: timeout, resend packet %d\n", timer_seq);
+      tolayer3(0, A_buffer[timer_seq]);
+      packets_resent++;
+  }
+
+  stoptimer(0);
+  timer_seq = -1;
+
+  for (i = 0; i < SEQSPACE; i++) {
+      int seq = (A_base + i) % SEQSPACE;
+      if (A_buffered[seq] && !A_acknowledged[seq]) {
+          starttimer(0, RTT);
+          timer_seq = seq;
+          break;
+      }
+  }
 }
+
 
 void A_init(void) {
     int i;
@@ -138,21 +156,24 @@ void B_input(struct pkt packet) {
     bool in_window;
 
     seqnum = packet.seqnum;
-    if (IsCorrupted(packet))
+    if (IsCorrupted(packet)) {
+        printf("----B: received corrupted packet\n");
         goto send_ack_only;
-
+    }
     upper_window = (B_expectedseqnum + WINDOWSIZE) % SEQSPACE;
     in_window = (B_expectedseqnum <= seqnum && seqnum < B_expectedseqnum + WINDOWSIZE) ||
                 (B_expectedseqnum + WINDOWSIZE >= SEQSPACE && seqnum < upper_window);
 
-    if (!in_window)
+    if (!in_window) {
+        printf("----B: packet %d is outside the receive window\n", seqnum);
         goto send_ack_only;
+    }
 
     if (!B_received[seqnum]) {
         B_buffer[seqnum] = packet;
         B_received[seqnum] = true;
         packets_received++;
-        
+
         printf("----B: packet %d is correctly received, send ACK!\n", seqnum);
     }
 
@@ -166,7 +187,14 @@ void B_input(struct pkt packet) {
 
 send_ack_only:
     ackpkt.seqnum = 0;
-    ackpkt.acknum = seqnum;
+    if (!IsCorrupted(packet) && B_received[seqnum]) {
+        ackpkt.acknum = seqnum;
+        printf("----B: sending ACK %d (received valid and in-order)\n", seqnum);
+    } else {
+        ackpkt.acknum = (B_expectedseqnum - 1 + SEQSPACE) % SEQSPACE;
+        printf("----B: sending duplicate/lost ACK %d (last in-order packet)\n", ackpkt.acknum);
+    }
+
     for (i = 0; i < 20; i++)
         ackpkt.payload[i] = '0';
     ackpkt.checksum = ComputeChecksum(ackpkt);
