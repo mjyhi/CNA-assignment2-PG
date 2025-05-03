@@ -195,14 +195,15 @@ void A_timerinterrupt(void)
 /* entity A routines are called. You can use it to do any initialization */
 void A_init(void)
 {
-  /* initialise A's window, buffer and sequence number */
-  A_nextseqnum = 0;  /* A starts with seq num 0, do not change this */
-  windowfirst = 0;
-  windowlast = -1;   /* windowlast is where the last packet sent is stored.
-		     new packets are placed in winlast + 1
-		     so initially this is set to -1
-		   */
-  windowcount = 0;
+    A_base = 0;           // Initialize base of the sender window
+    A_nextseqnum = 0;     // Initialize next sequence number to use
+    timer_seq = -1;       // No timer running at the beginning
+
+    // Mark all packets as not yet sent and not acknowledged
+    for (int i = 0; i < SEQSPACE; i++) {
+        A_acknowledged[i] = false;
+        A_buffered[i] = false;
+    }
 }
 
 
