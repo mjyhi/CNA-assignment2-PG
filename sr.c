@@ -70,47 +70,47 @@ static int windowcount;                /* the number of packets currently awaiti
 static int A_nextseqnum;               /* the next sequence number to be used by the sender */
 
 /* called from layer 5 (application layer), passed the message to be sent to other side */
+// This function is called whenever a new message is passed from layer 5 to layer 4 (sender side).
+// It constructs a packet, stores it in the sender buffer, and sends it if the window is not full.
+
 void A_output(struct msg message)
 {
-  struct pkt sendpkt;
-  int i;
+    // Check if window is full
+    int window_size = (A_nextseqnum - A_base + SEQSPACE) % SEQSPACE;
+    if (window_size >= WINDOWSIZE) {
+        if (TRACE > 0)
+            printf("A_output: Window full, dropping message.\n");
+        window_full++;
+        return;
+    }
 
-  /* if not blocked waiting on ACK */
-  if ( windowcount < WINDOWSIZE) {
-    if (TRACE > 1)
-      printf("----A: New message arrives, send window is not full, send new messge to layer3!\n");
+    // Construct the packet
+    struct pkt newpkt;
+    newpkt.seqnum = A_nextseqnum;
+    newpkt.acknum = NOTINUSE;
+    for (int i = 0; i < 20; i++) {
+        newpkt.payload[i] = message.data[i];
+    }
+    newpkt.checksum = ComputeChecksum(newpkt);
 
-    /* create packet */
-    sendpkt.seqnum = A_nextseqnum;
-    sendpkt.acknum = NOTINUSE;
-    for ( i=0; i<20 ; i++ )
-      sendpkt.payload[i] = message.data[i];
-    sendpkt.checksum = ComputeChecksum(sendpkt);
+    // Store packet in buffer
+    A_buffer[A_nextseqnum] = newpkt;
+    A_buffered[A_nextseqnum] = true;
+    A_acknowledged[A_nextseqnum] = false;
 
-    /* put packet in window buffer */
-    /* windowlast will always be 0 for alternating bit; but not for GoBackN */
-    windowlast = (windowlast + 1) % WINDOWSIZE;
-    buffer[windowlast] = sendpkt;
-    windowcount++;
-
-    /* send out packet */
+    // Send packet to the network
     if (TRACE > 0)
-      printf("Sending packet %d to layer 3\n", sendpkt.seqnum);
-    tolayer3 (A, sendpkt);
+        printf("A_output: Sending packet with seqnum %d\n", newpkt.seqnum);
+    tolayer3(A, newpkt);
 
-    /* start timer if first packet in window */
-    if (windowcount == 1)
-      starttimer(A,RTT);
+    // Start timer if this is the only unACKed packet (i.e. if no timer is running)
+    if (timer_seq == -1) {
+        starttimer(A, RTT);
+        timer_seq = A_nextseqnum;
+    }
 
-    /* get next sequence number, wrap back to 0 */
+    // Update next sequence number (wrap around SEQSPACE)
     A_nextseqnum = (A_nextseqnum + 1) % SEQSPACE;
-  }
-  /* if blocked,  window is full */
-  else {
-    if (TRACE > 0)
-      printf("----A: New message arrives, send window is full\n");
-    window_full++;
-  }
 }
 
 
