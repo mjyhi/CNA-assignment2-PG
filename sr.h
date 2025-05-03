@@ -3,8 +3,6 @@
 
 #define BIDIRECTIONAL 0
 
-#include "emulator.h"  /* Required for struct msg and struct pkt definitions */
-
 /* Function prototypes for Selective Repeat protocol */
 void A_init(void);
 void B_init(void);
