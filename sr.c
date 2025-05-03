@@ -95,14 +95,12 @@ void A_input(struct pkt packet) {
           printf("----A: duplicate ACK received, do nothing!\n");
       }
 
-      // Slide window forward
       while (A_buffered[A_base] && A_acknowledged[A_base]) {
           A_buffered[A_base] = false;
           A_acknowledged[A_base] = false;
           A_base = (A_base + 1) % SEQSPACE;
       }
 
-      // Restart timer for earliest unacked packet
       stoptimer(0);
       timer_seq = -1;
       for (i = 0; i < WINDOWSIZE; i++) {
@@ -134,7 +132,6 @@ void A_timerinterrupt() {
       }
   }
 
-  // Restart timer for the earliest unacked packet
   for (i = 0; i < WINDOWSIZE; i++) {
       int seq = (A_base + i) % SEQSPACE;
       if (A_buffered[seq] && !A_acknowledged[seq]) {
