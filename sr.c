@@ -1,189 +1,237 @@
+/* ========================================================================
+ *  sr.c  ―  Selective‑Repeat protocol (C90‑compatible implementation)
+ *           – drops messages from layer‑5 when the send window is full.
+ *  All comments are in English; width ≤ 80 columns.
+ * ====================================================================== */
+
  #include <stdlib.h>
  #include <stdio.h>
- #include <stdbool.h>
- #include <string.h>          /* <--  memcpy / memset */
- #include "emulator.h"        /* simulator framework – defines struct msg / pkt */
- #include "sr.h"              /* function prototypes & compile‑time params  */
+ #include <string.h>          /* memcpy / memset                      */
+ #include "emulator.h"
+ #include "sr.h"
  
- /*--------------------------------------------------------------------*/
- /*                       Global data / statistics                     */
- /*--------------------------------------------------------------------*/
+ /* ----------------------------------------------------------------------
+  *  Boolean type for pre‑C99 C compilers
+  * -------------------------------------------------------------------- */
+ typedef int  bool;
+ #define true  1
+ #define false 0
  
- #define SEQ_SPACE     8               /* sequence‑number space size   */
- #define WINDOW_SIZE   4               /* sender / receiver window     */
+ /* ----------------------------------------------------------------------
+  *  Helper macro
+  * -------------------------------------------------------------------- */
+ #define IN_WINDOW(base, seq) \
+         ((((seq) - (base) + SEQSPACE) % SEQSPACE) < WINDOWSIZE)
  
- static struct pkt A_buffer[SEQ_SPACE];/* sender’s pkt buffer          */
- static bool        A_valid[SEQ_SPACE];/* slot in use?                 */
- static int         A_base       = 0;  /* seq# of earliest unacked pkt */
- static int         A_nextseqnum = 0;  /* next sequence number to use  */
- static double      timeout_interval = 20.0; /* timer (sim units)      */
+ /* ----------------------------------------------------------------------
+  *  External statistics / trace variables (defined in emulator.c)
+  * -------------------------------------------------------------------- */
+ extern int TRACE;
+ extern int window_full;
+ extern int packets_resent;
+ extern int total_ACKs_received;
+ extern int new_ACKs;
+ extern int packets_received;
  
- static int         B_expected = 0;    /* next in‑order seq# at B      */
- static struct pkt  B_buffer[SEQ_SPACE];/* out‑of‑order storage        */
- static bool        B_valid[SEQ_SPACE];
- 
- /* ---  statistics counters (avoid “undeclared” errors) -------------- */
- int window_full          = 0;  /* msgs dropped when window full    */
- int packets_resent       = 0;  /* retransmissions by A             */
- int total_ACKs_received  = 0;  /* all ACKs seen at A (incl. dup)   */
- int new_ACKs             = 0;  /* ACKs that newly ack data         */
- int packets_received     = 0;  /* pkts correctly delivered to B    */
- 
- /*--------------------------------------------------------------------*/
- /*                         Helper  functions                          */
- /*--------------------------------------------------------------------*/
- 
- /* Compute simple additive checksum (1‑complement handled by caller) */
+ /* ----------------------------------------------------------------------
+  *  Utility functions
+  * -------------------------------------------------------------------- */
  static int ComputeChecksum(struct pkt packet)
  {
-     int sum = packet.seqnum + packet.acknum;
-     for (int i = 0; i < 20; i++)
+     int i, sum;
+ 
+     sum = packet.seqnum + packet.acknum;
+     for (i = 0; i < 20; i++)
          sum += (unsigned char)packet.payload[i];
+ 
      return sum;
  }
  
  static bool IsCorrupted(struct pkt packet)
  {
-     return packet.checksum != ComputeChecksum(packet);
+     return (packet.checksum != ComputeChecksum(packet));
  }
  
- /*--------------------------------------------------------------------*/
- /*                         Sender  (Entity A)                         */
- /*--------------------------------------------------------------------*/
+ /* ----------------------------------------------------------------------
+  *  Sender (entity A) state
+  * -------------------------------------------------------------------- */
+ static struct pkt A_buffer[SEQSPACE];       /* sent but not yet ACKed      */
+ static bool       A_valid[SEQSPACE];        /* slot in use                 */
+ static bool       A_acked[SEQSPACE];        /* packet already ACKed        */
  
- void A_output(struct msg message)
+ static int A_base       = 0;                /* left edge of send window    */
+ static int A_nextseqnum = 0;                /* next sequence number to use */
+ static int timer_seq    = -1;               /* seq# whose timer is running */
+ 
+ /* Local helper : build + send a packet and (re)start timer if needed */
+ static void A_send(struct msg message)
  {
-     if (((A_nextseqnum + SEQ_SPACE) - A_base) % SEQ_SPACE >= WINDOW_SIZE) {
-         /* window full ‑‑ drop message from layer‑5 */
-         window_full++;
-         return;
-     }
- 
      struct pkt p;
-     p.seqnum = A_nextseqnum;
-     p.acknum = 0;
-     memcpy(p.payload, message.data, sizeof p.payload);
+ 
+     memcpy(p.payload, message.data, 20);
+     p.seqnum   = A_nextseqnum;
+     p.acknum   = NOTINUSE;
      p.checksum = ComputeChecksum(p);
  
      A_buffer[A_nextseqnum] = p;
-     A_valid [A_nextseqnum] = true;
+     A_valid[A_nextseqnum]  = true;
+     A_acked[A_nextseqnum]  = false;
  
-     tolayer3(0, p);
+     if (TRACE > 1)
+         printf("A: send pkt %d to layer3\n", p.seqnum);
  
-     /* start timer if base equals nextseqnum (i.e. window was empty) */
-     if (A_base == A_nextseqnum)
-         starttimer(0, timeout_interval);
+     tolayer3(A, p);
  
-     A_nextseqnum = (A_nextseqnum + 1) % SEQ_SPACE;
+     if (timer_seq == -1) {            /* no timer running               */
+         starttimer(A, RTT);
+         timer_seq = A_nextseqnum;
+     }
+ 
+     A_nextseqnum = (A_nextseqnum + 1) % SEQSPACE;
  }
  
+ /* Called by layer‑5 on the sender side */
+ void A_output(struct msg message)
+ {
+     int win_size = (A_nextseqnum - A_base + SEQSPACE) % SEQSPACE;
+ 
+     if (win_size >= WINDOWSIZE) {      /* window full ‑‑ drop message   */
+         window_full++;
+         if (TRACE > 0)
+             printf("A: window full, message dropped\n");
+         return;
+     }
+ 
+     A_send(message);
+ }
+ 
+ /* Called when an ACK arrives from layer‑3 */
  void A_input(struct pkt packet)
  {
-     if (IsCorrupted(packet))
-         return;
+     int acknum, i;
  
+     if (IsCorrupted(packet)) {
+         if (TRACE > 0)
+             printf("A: corrupted ACK ignored\n");
+         return;
+     }
+ 
+     acknum = packet.acknum;
      total_ACKs_received++;
  
-     /* cumulative ACK – slide window */
-     int ack = packet.acknum;
-     while (A_base != (ack + 1) % SEQ_SPACE && A_valid[A_base]) {
+     if (!A_valid[acknum] || A_acked[acknum]) /* duplicate ACK            */
+         return;
+ 
+     A_acked[acknum] = true;
+     new_ACKs++;
+ 
+     /* slide window for every consecutive ACKed packet from the base    */
+     while (A_valid[A_base] && A_acked[A_base]) {
          A_valid[A_base] = false;
-         A_base = (A_base + 1) % SEQ_SPACE;
-         new_ACKs++;
+         A_base = (A_base + 1) % SEQSPACE;
      }
  
-     if (A_base == A_nextseqnum)
-         stoptimer(0);              /* nothing outstanding  */
-     else {
-         stoptimer(0);
-         starttimer(0, timeout_interval); /* restart timer  */
-     }
- }
- 
- void A_timerinterrupt(void)
- {
-     starttimer(0, timeout_interval);   /* restart first!  */
- 
-     /* resend all un‑ACKed packets in current window */
-     for (int i = 0; i < WINDOW_SIZE; i++) {
-         int seq = (A_base + i) % SEQ_SPACE;
-         if (A_valid[seq]) {
-             tolayer3(0, A_buffer[seq]);
-             packets_resent++;
+     /* restart timer for earliest outstanding pkt, or stop if none      */
+     stoptimer(A);
+     timer_seq = -1;
+     for (i = 0; i < WINDOWSIZE; i++) {
+         int s = (A_base + i) % SEQSPACE;
+         if (A_valid[s] && !A_acked[s]) {
+             starttimer(A, RTT);
+             timer_seq = s;
+             break;
          }
      }
  }
  
- void A_init(void)
+ /* Timer expired – resend the timed packet */
+ void A_timerinterrupt(void)
  {
-     memset(A_valid, 0, sizeof A_valid);
+     if (timer_seq == -1)               /* nothing to resend              */
+         return;
+ 
+     if (TRACE > 0)
+         printf("A: timeout, resend pkt %d\n", timer_seq);
+ 
+     tolayer3(A, A_buffer[timer_seq]);
+     packets_resent++;
+ 
+     starttimer(A, RTT);                /* restart timer for same pkt     */
  }
  
- /*--------------------------------------------------------------------*/
- /*                       Receiver  (Entity B)                         */
- /*--------------------------------------------------------------------*/
- 
- static void DeliverBufferedPackets(void)
+ void A_init(void)
  {
-     /* deliver any now‑in‑order pkts */
+     int i;
+ 
+     A_base       = 0;
+     A_nextseqnum = 0;
+     timer_seq    = -1;
+ 
+     for (i = 0; i < SEQSPACE; i++) {
+         A_valid[i] = false;
+         A_acked[i] = false;
+     }
+ }
+ 
+ /* ----------------------------------------------------------------------
+  *  Receiver (entity B) state
+  * -------------------------------------------------------------------- */
+ static struct pkt B_buffer[SEQSPACE];   /* out‑of‑order packet storage    */
+ static bool       B_valid[SEQSPACE];
+ 
+ static int B_expected = 0;             /* next in‑order seq number       */
+ 
+ /* deliver any buffered in‑order packets to layer‑5 */
+ static void B_deliver(void)
+ {
      while (B_valid[B_expected]) {
-         tolayer5(1, B_buffer[B_expected].payload);
+         tolayer5(B, B_buffer[B_expected].payload);
          B_valid[B_expected] = false;
-         B_expected = (B_expected + 1) % SEQ_SPACE;
+         B_expected = (B_expected + 1) % SEQSPACE;
          packets_received++;
      }
  }
  
+ /* Called when a data packet arrives from layer‑3 */
  void B_input(struct pkt packet)
  {
-     if (IsCorrupted(packet)) {                /* Bad packet – resend ACK */
-         struct pkt nak;
-         nak.seqnum = 0;
-         nak.acknum = (B_expected + SEQ_SPACE - 1) % SEQ_SPACE;
-         memset(nak.payload, 0, sizeof nak.payload);
-         nak.checksum = ComputeChecksum(nak);
-         tolayer3(1, nak);
+     int diff, i;
+     bool in_window;
+     struct pkt ack;
+ 
+     if (IsCorrupted(packet)) {         /* send NAK for last good pkt     */
+         ack.seqnum = 0;
+         ack.acknum = (B_expected + SEQSPACE - 1) % SEQSPACE;
+         memset(ack.payload, 0, 20);
+         ack.checksum = ComputeChecksum(ack);
+         tolayer3(B, ack);
          return;
      }
  
-     /* In‑window and not yet received? */
-     int diff = (packet.seqnum + SEQ_SPACE - B_expected) % SEQ_SPACE;
-     bool in_window = diff < WINDOW_SIZE;
+     diff       = (packet.seqnum - B_expected + SEQSPACE) % SEQSPACE;
+     in_window  = (diff < WINDOWSIZE);
  
      if (in_window && !B_valid[packet.seqnum]) {
-         /* buffer it */
          B_buffer[packet.seqnum] = packet;
-         B_valid [packet.seqnum] = true;
+         B_valid[packet.seqnum]  = true;
      }
  
-     /* ACK the highest contiguous seq# already received */
-     struct pkt ack;
+     /* ACK always piggy‑backs highest contiguous seq received so far    */
      ack.seqnum = 0;
-     ack.acknum = (packet.seqnum + SEQ_SPACE) % SEQ_SPACE;
-     memset(ack.payload, 0, sizeof ack.payload);
+     ack.acknum = (B_expected + SEQSPACE - 1) % SEQSPACE;
+     memset(ack.payload, 0, 20);
      ack.checksum = ComputeChecksum(ack);
-     tolayer3(1, ack);
+     tolayer3(B, ack);
  
-     DeliverBufferedPackets();
+     B_deliver();
  }
  
  void B_init(void)
  {
-     memset(B_valid, 0, sizeof B_valid);
+     memset(B_valid, 0, sizeof(B_valid));
  }
  
- /*--------------------------------------------------------------------*/
- /*                    Final statistics  printing                      */
- /*--------------------------------------------------------------------*/
- 
- void Simulation_done(void)
- {
-     printf("\n===== SR protocol statistics =====\n");
-     printf("Messages dropped (window full):            %d\n", window_full);
-     printf("Packets resent by A:                       %d\n", packets_resent);
-     printf("Total ACKs received at A:                  %d\n", total_ACKs_received);
-     printf("New ACKs that advanced window:             %d\n", new_ACKs);
-     printf("Correct packets received at B:             %d\n", packets_received);
-     printf("===========================================\n");
- }
+ /* -------- stubs required by the simulator in unidirectional mode ---- */
+ void B_output(struct msg message)            { (void)message; /* unused */ }
+ void B_timerinterrupt(void)                  { /* never used  */        }
  
