@@ -8,7 +8,7 @@
  #include <string.h>          /* memset */
  
  #include "emulator.h"
- #include "sr.h"
+ #include "gbn.h"
  
  /* C90 has no <stdbool.h>; define a simple boolean type */
  typedef int bool;
