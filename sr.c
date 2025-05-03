@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include "emulator.h"
-#include "gbn.h"
+#include "sr.h"
 
 /* ******************************************************************
    Go Back N protocol.  Adapted from J.F.Kurose
@@ -63,11 +63,6 @@ bool IsCorrupted(struct pkt packet)
 
 
 /********* Sender (A) variables and functions ************/
-
-static struct pkt buffer[WINDOWSIZE];  /* array for storing packets waiting for ACK */
-static int windowfirst, windowlast;    /* array indexes of the first/last packet awaiting ACK */
-static int windowcount;                /* the number of packets currently awaiting an ACK */
-static int A_nextseqnum;               /* the next sequence number to be used by the sender */
 
 /* called from layer 5 (application layer), passed the message to be sent to other side */
 // This function is called whenever a new message is passed from layer 5 to layer 4 (sender side).
@@ -262,6 +257,7 @@ send_ack_only:
     tolayer3(B, ackpkt);
 }
 
+
 /* the following routine will be called once (only) before any other */
 /* entity B routines are called. You can use it to do any initialization */
 void B_init(void)
@@ -276,11 +272,11 @@ void B_init(void)
  *****************************************************************************/
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
-void B_output(struct msg message)
-{
+void B_output(struct msg message) {
+  // Bidirectional transfer is not used in this assignment
 }
 
 /* called when B's timer goes off */
-void B_timerinterrupt(void)
-{
+void B_timerinterrupt(void) {
+  // No timer used at receiver side
 }
