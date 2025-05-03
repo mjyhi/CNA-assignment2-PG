@@ -12,6 +12,7 @@
 #define RTT  16.0
 #define WINDOWSIZE 6
 #define SEQSPACE 12
+#define BIDIRECTIONAL 0
 #define NOTINUSE (-1)
 
 static struct pkt A_buffer[SEQSPACE];
@@ -35,13 +36,13 @@ bool IsCorrupted(struct pkt packet) {
 
 void A_output(struct msg message) {
     int window_size = (A_nextseqnum - A_base + SEQSPACE) % SEQSPACE;
+    int i;
     if (window_size >= WINDOWSIZE) {
         window_full++;
         return;
     }
 
     struct pkt newpkt;
-    int i;
     newpkt.seqnum = A_nextseqnum;
     newpkt.acknum = NOTINUSE;
     for (i = 0; i < 20; i++)
@@ -63,10 +64,12 @@ void A_output(struct msg message) {
 }
 
 void A_input(struct pkt packet) {
+    int acknum;
+    int i;
     if (IsCorrupted(packet))
         return;
 
-    int acknum = packet.acknum;
+    acknum = packet.acknum;
     total_ACKs_received++;
 
     if (!A_acknowledged[acknum]) {
@@ -78,7 +81,6 @@ void A_input(struct pkt packet) {
         stoptimer(0);
         timer_seq = -1;
 
-        int i;
         for (i = 0; i < WINDOWSIZE; i++) {
             int seq = (A_base + i) % SEQSPACE;
             if (A_buffered[seq] && !A_acknowledged[seq]) {
@@ -97,10 +99,11 @@ void A_input(struct pkt packet) {
 }
 
 void A_timerinterrupt(void) {
+    
+    struct pkt pkt_to_resend = A_buffer[timer_seq];
     if (timer_seq == -1 || !A_buffered[timer_seq] || A_acknowledged[timer_seq])
         return;
 
-    struct pkt pkt_to_resend = A_buffer[timer_seq];
     tolayer3(0, pkt_to_resend);
     packets_resent++;
     starttimer(0, RTT);
@@ -123,10 +126,12 @@ static int B_expectedseqnum = 0;
 
 void B_input(struct pkt packet) {
     struct pkt ackpkt;
-    int seqnum = packet.seqnum;
-    int upper_window, i;
+    int seqnum;
+    int upper_window;
+    int i;
     bool in_window;
 
+    seqnum = packet.seqnum;
     if (IsCorrupted(packet))
         goto send_ack_only;
 
