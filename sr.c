@@ -75,52 +75,55 @@ void A_output(struct msg message) {
 }
 
 void A_input(struct pkt packet) {
-    int acknum;
-    int i;
-    if (IsCorrupted(packet)) {
-        printf("----A: corrupted ACK is received, do nothing!\n");
-        return;
-    }
+  int acknum = packet.acknum;
+  int i;
 
-    acknum = packet.acknum;
-    printf("----A: uncorrupted ACK %d is received\n", acknum);
-    total_ACKs_received++;
+  if (IsCorrupted(packet)) {
+      printf("----A: corrupted ACK is received, do nothing!\n");
+      return;
+  }
 
-    if (!A_acknowledged[acknum]) {
-        A_acknowledged[acknum] = true;
-        new_ACKs++;
-        printf("----A: ACK %d is not a duplicate\n", acknum);
-    } else {
-        printf("----A: duplicate ACK received, do nothing!\n");
-    }
-  
+  printf("----A: uncorrupted ACK %d is received\n", acknum);
+  total_ACKs_received++;
 
-    if (timer_seq != -1 && A_acknowledged[timer_seq]) {
+  if (IN_WINDOW(A_base, acknum, WINDOWSIZE)) {
+      if (!A_acknowledged[acknum]) {
+          A_acknowledged[acknum] = true;
+          new_ACKs++;
+          printf("----A: ACK %d is not a duplicate\n", acknum);
+      } else {
+          printf("----A: duplicate ACK received, do nothing!\n");
+      }
+
+      // Slide window forward
+      while (A_buffered[A_base] && A_acknowledged[A_base]) {
+          A_buffered[A_base] = false;
+          A_acknowledged[A_base] = false;
+          A_base = (A_base + 1) % SEQSPACE;
+      }
+
+      // Restart timer for earliest unacked packet
       stoptimer(0);
       timer_seq = -1;
-      
-      for (i = 0; i < SEQSPACE; i++) {
-          int index = (A_base + i) % SEQSPACE;
-          if (A_buffered[index] && !A_acknowledged[index]) {
+      for (i = 0; i < WINDOWSIZE; i++) {
+          int seq = (A_base + i) % SEQSPACE;
+          if (A_buffered[seq] && !A_acknowledged[seq]) {
               starttimer(0, RTT);
-              timer_seq = index;
+              timer_seq = seq;
               break;
           }
       }
-    }
-  
-  
-
-    while (A_buffered[A_base] && A_acknowledged[A_base]) {
-        A_buffered[A_base] = false;
-        A_acknowledged[A_base] = false;
-        A_base = (A_base + 1) % SEQSPACE;
-    }
+  } else {
+      printf("----A: ACK %d is outside window, ignoring\n", acknum);
+  }
 }
 
 void A_timerinterrupt() {
   printf("----A: timeout, resend all unACKed packets in window\n");
   int i;
+
+  stoptimer(0);
+  timer_seq = -1;
 
   for (i = 0; i < WINDOWSIZE; i++) {
       int seq = (A_base + i) % SEQSPACE;
@@ -131,17 +134,17 @@ void A_timerinterrupt() {
       }
   }
 
-  stoptimer(0);
-  timer_seq = -1;
-  for (i = 0; i < SEQSPACE; i++) {
-    int seq = (A_base + i) % SEQSPACE;
-    if (A_buffered[seq] && !A_acknowledged[seq]) {
-        starttimer(0, RTT);
-        timer_seq = seq;
-        break;
-    }
+  // Restart timer for the earliest unacked packet
+  for (i = 0; i < WINDOWSIZE; i++) {
+      int seq = (A_base + i) % SEQSPACE;
+      if (A_buffered[seq] && !A_acknowledged[seq]) {
+          starttimer(0, RTT);
+          timer_seq = seq;
+          break;
+      }
   }
 }
+
 
 void A_init(void) {
   int i;
