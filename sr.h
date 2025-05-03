@@ -1,20 +1,12 @@
+/* ------------------------------------------------------------------
+ * sr.h  ―  Selective Repeat protocol constants
+ * ------------------------------------------------------------------*/
 #ifndef SR_H
 #define SR_H
 
-#define BIDIRECTIONAL 0 
-#define RTT 16.0
-#define WINDOWSIZE 6
-#define SEQSPACE 12
-#define NOTINUSE (-1)
+#define RTT         16.0   /* timer value – MUST be 16.0 */
+#define WINDOWSIZE  6      /* sender / receiver window size  */
+#define SEQSPACE    12     /* sequence‑number space ≥ 2*WINDOWSIZE */
+#define NOTINUSE   (-1)    /* placeholder for unused acknum */
 
-void A_output(struct msg message);
-void A_input(struct pkt packet);
-void A_timerinterrupt(void);
-void A_init(void);
-
-void B_input(struct pkt packet);
-void B_init(void);
-void B_output(struct msg message);
-void B_timerinterrupt(void);
-
-#endif
+#endif /* SR_H */
