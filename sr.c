@@ -22,11 +22,18 @@
    - added GBN implementation
 **********************************************************************/
 
-#define RTT  16.0       /* round trip time.  MUST BE SET TO 16.0 when submitting assignment */
-#define WINDOWSIZE 6    /* the maximum number of buffered unacked packet
-                          MUST BE SET TO 6 when submitting assignment */
-#define SEQSPACE 7      /* the min sequence space for GBN must be at least windowsize + 1 */
-#define NOTINUSE (-1)   /* used to fill header fields that are not being used */
+#define RTT  16.0
+#define WINDOWSIZE 6
+#define SEQSPACE 12  // Sequence number space must be at least 2 * WINDOWSIZE
+#define NOTINUSE (-1)
+
+// Sender-side variables for Selective Repeat protocol
+static struct pkt A_buffer[SEQSPACE];         // Buffer to store sent but unacknowledged packets
+static bool A_acknowledged[SEQSPACE];         // Flags indicating which packets have been ACKed
+static bool A_buffered[SEQSPACE];             // Flags indicating which packets are currently in use
+static int A_base;                            // Base of the sending window
+static int A_nextseqnum;                      // Next sequence number to be used for new packets
+static int timer_seq = -1;                    // Sequence number currently being tracked by the timer
 
 /* generic procedure to compute the checksum of a packet.  Used by both sender and receiver
    the simulator will overwrite part of your packet with 'z's.  It will not overwrite your
