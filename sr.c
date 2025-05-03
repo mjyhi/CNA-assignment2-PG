@@ -43,6 +43,8 @@ void A_output(struct msg message) {
         return;
     }
 
+    printf("----A: New message arrives, send window is not full, send new messge to layer3!\n");
+
     newpkt.seqnum = A_nextseqnum;
     newpkt.acknum = NOTINUSE;
     for (i = 0; i < 20; i++)
@@ -54,6 +56,7 @@ void A_output(struct msg message) {
     A_acknowledged[A_nextseqnum] = false;
 
     tolayer3(0, newpkt);
+    printf("Sending packet %d to layer 3\n", newpkt.seqnum);
 
     if (timer_seq == -1) {
         starttimer(0, RTT);
@@ -70,11 +73,14 @@ void A_input(struct pkt packet) {
         return;
 
     acknum = packet.acknum;
+    printf("----A: uncorrupted ACK %d is received\n", acknum);
     total_ACKs_received++;
 
     if (!A_acknowledged[acknum]) {
         A_acknowledged[acknum] = true;
         new_ACKs++;
+
+        printf("----A: ACK %d is not a duplicate\n", acknum);
     }
 
     if (acknum == timer_seq) {
@@ -146,7 +152,11 @@ void B_input(struct pkt packet) {
         B_buffer[seqnum] = packet;
         B_received[seqnum] = true;
         packets_received++;
+        
+        printf("----B: packet %d is correctly received, send ACK!\n", seqnum);
     }
+
+    
 
     while (B_received[B_expectedseqnum]) {
         tolayer5(1, B_buffer[B_expectedseqnum].payload);
