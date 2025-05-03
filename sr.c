@@ -35,6 +35,7 @@ bool IsCorrupted(struct pkt packet) {
 }
 
 void A_output(struct msg message) {
+    struct pkt newpkt;
     int window_size = (A_nextseqnum - A_base + SEQSPACE) % SEQSPACE;
     int i;
     if (window_size >= WINDOWSIZE) {
@@ -42,7 +43,6 @@ void A_output(struct msg message) {
         return;
     }
 
-    struct pkt newpkt;
     newpkt.seqnum = A_nextseqnum;
     newpkt.acknum = NOTINUSE;
     for (i = 0; i < 20; i++)
